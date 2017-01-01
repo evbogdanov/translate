@@ -1,0 +1,80 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+%% coding: utf-8
+%%! -smp enable -sname translate
+
+-include_lib("xmerl/include/xmerl.hrl").
+
+%% TRANSLATE
+%% -----------------------------------------------------------------------------
+
+-define(FROM, "en").
+-define(TO, "ru").
+-define(BASE_URL, "https://translate.yandex.net/api/v1.5/tr/translate").
+
+main(Args) ->
+    %% setup
+    io:setopts([{encoding, unicode}]),
+    ssl:start(),
+    application:start(inets),
+
+    %% begin
+    translate(os:getenv("YANDEXAPIKEY"), string:join(Args, " ")).
+
+translate(false, _Text) ->
+    err("$YANDEXAPIKEY not set");
+translate(Key, Text) ->
+    EncodedText = encode(Text),
+    Url = string:join([?BASE_URL,
+                       "?key=", Key,
+                       "&lang=", ?FROM, "-", ?TO,
+                       "&text=", EncodedText], ""),
+    parse(httpc:request(Url)).
+
+%% PARSE XML
+%% -----------------------------------------------------------------------------
+
+parse({ok, {{_, 200, "OK"}, _, XML}}) ->
+    case xmerl_scan:string(XML) of
+        {#xmlElement{content = [#xmlElement{content = [Translation]}]}, _} ->
+            io:format("~ts~n", [Translation#xmlText.value]);
+        _NoTranslation->
+            err("Parser error")
+    end;
+parse(_) ->
+    err("Server error").
+
+%% ENCODE URI COMPONENT
+%% -----------------------------------------------------------------------------
+
+-define(SAFE_CHARS, [$A, $B, $C, $D, $E, $F, $G, $H, $I, $J, $K, $L, $M, $N, $O,
+                     $P, $Q, $R, $S, $T, $U, $V, $W, $X, $Y, $Z,
+
+                     $a, $b, $c, $d, $e, $f, $g, $h, $i, $j, $k, $l, $m, $n, $o,
+                     $p, $q, $r, $s, $t, $u, $v, $w, $x, $y, $z,
+
+                     $0, $1, $2, $3, $4, $5, $6, $7, $8, $9, $-, $_, $., $~]).
+
+encode(Str) ->
+    lists:flatten(lists:reverse(encode(Str, ""))).
+
+encode("", Acc) ->
+    Acc;
+encode([Char | Rest], Acc) ->
+    case lists:member(Char, ?SAFE_CHARS) of
+        true ->
+            encode(Rest, [Char | Acc]);
+        false ->
+            Encoded = [begin
+                           Hex = integer_to_list(X, 16),
+                           [$% | Hex]
+                       end || <<X>> <= unicode:characters_to_binary([Char])],
+            encode(Rest, [Encoded | Acc])
+    end.
+
+%% PRINT ERROR
+%% -----------------------------------------------------------------------------
+
+err(Msg) ->
+    Error = "¯\\_(ツ)_/¯",
+    io:format("~ts~n~s~n", [Error, Msg]).
